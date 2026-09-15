@@ -319,6 +319,106 @@ sudo docker compose down
 
 https://github.com/meshkov-sergey/shvirtd-example-python
 
+
+---
+
+## Задача 6. Извлечение бинарника из Docker-образа
+
+### Исследование образа через dive
+
+Исследование образа в утилите `dive`:
+
+```bash
+dive hashicorp/terraform:latest
+```
+
+**Что видно в dive:**
+- Список слоёв образа слева — от базового (`FROM blobs`) до слоя с terraform
+- Отдельный слой с командой `COPY dist/linux/amd64/terraform /bin/terraform` размером **120 MB** — именно в нём лежит наш бинарник
+- Содержимое выбранного слоя справа — видна директория `/bin` со симлинками busybox и сам файл `terraform`
+- Общая эффективность образа 99% — лишних слоёв почти нет
+
+**Зачем это нужно:** `dive` позволяет точно определить, в каком слое лежит нужный файл. Это важно для `docker save`, потому что образ сохраняется как набор отдельных tar-слоёв, и при извлечении файла надо распаковать **правильный** слой. Зная размер (~120 MB) и то что он последний, мы легко найдём его среди `blobs/sha256/*` — это будет самый большой файл.
+
+![dive inspect](img/26-dive-inspect.png)
+
+### Эталонный хеш из контейнера
+
+```bash
+docker run --rm --entrypoint sh hashicorp/terraform:latest -c "sha256sum /bin/terraform && /bin/terraform --version"
+```
+
+Пояснение команд:
+- `sha256sum /bin/terraform` — эталонный хеш для сверки
+- `&& /bin/terraform --version` — проверка версии
+
+![Проверка внутри контейнера](img/27-terraform-inside-check.png)
+
+### Извлечение через docker save
+
+```bash
+mkdir -p ~/terraform-extract
+cd ~/terraform-extract
+docker save -o terraform.tar hashicorp/terraform:latest
+ls -lh terraform.tar
+```
+
+Пояснение команд:
+- `mkdir -p` — создать директорию с родительскими при необходимости
+- `docker save -o terraform.tar` — сохранить образ в tar-архив
+- `-o` — файл для сохранения
+
+![docker save](img/28-docker-save.png)
+
+### Распаковка архива и поиск слоя
+
+```bash
+tar -xf terraform.tar
+ls -la
+du -sh blobs/sha256/* | sort -h | tail -3
+```
+
+Пояснение команд:
+- `tar -xf` — распаковать tar-архив (`-x` extract, `-f` file)
+- `du -sh` — размер файлов (`-s` summary, `-h` human-readable)
+- `sort -h | tail -3` — сортировка по размеру, вывод 3 самых больших
+
+![Распакованный архив](img/29-tar-extracted.png)
+
+Самый большой слой (115 MB) — это слой с `/bin/terraform`. Извлекаем его:
+
+```bash
+mkdir extracted
+tar -xf blobs/sha256/<hash_слоя> -C extracted
+ls -la extracted/bin/
+```
+
+Пояснение команд:
+- `-C extracted` — распаковать в указанную директорию
+
+![Извлечённый файл](img/30-extracted-file.png)
+
+### Проверка валидности
+
+Копируем бинарник в домашний каталог, даём право на выполнение, проверяем хеш и версию:
+
+```bash
+cp extracted/bin/terraform ~/terraform
+chmod +x ~/terraform
+sha256sum ~/terraform
+~/terraform --version
+```
+
+Пояснение команд:
+- `cp` — копирование файла
+- `chmod +x` — добавить право на выполнение
+- `sha256sum` — проверка хеша
+- `--version` — проверка работоспособности
+
+![Проверка извлечённого бинарника](img/31-terraform-validated.png)
+
+Хеш совпал с эталонным (`7d9946a5...`), версия `v1.16.2` — бинарник извлечён корректно.
+
 ## Автор
 
 - **Студент**: Мешков Сергей
