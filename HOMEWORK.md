@@ -188,6 +188,137 @@ docker compose down
 
 ---
 
+---
+
+## Задача 4. Деплой в Yandex Cloud
+
+### Создание ВМ
+
+В Yandex Cloud создана ВМ:
+- Образ: Ubuntu 24.04 LTS
+- 2 vCPU, 2 ГБ RAM, 10 ГБ HDD
+- Публичный IP: `51.250.92.180` (зарезервирован статически)
+- В группу безопасности `default-sg-...` добавлено правило: входящий TCP 8090 из `0.0.0.0/0`
+
+![ВМ в Yandex Cloud](img/13-yc-vm.png)
+
+![Правило в группе безопасности](img/13b-security-group.png)
+
+### Установка Docker
+
+Подключение по SSH и установка Docker через официальный скрипт:
+
+```bash
+ssh -i ~/.ssh/yc_key smeshkov@51.250.92.180
+
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+
+docker --version
+docker compose version
+```
+
+Пояснение команд:
+- `ssh -i ~/.ssh/yc_key smeshkov@51.250.92.180` — подключение к ВМ с указанием приватного ключа
+- `curl -fsSL` — флаги: `-f` без HTML-ошибок, `-s` тихий, `-S` показать ошибки, `-L` следовать редиректам
+- `-o get-docker.sh` — сохранить в файл
+- `sudo sh get-docker.sh` — запустить установочный скрипт
+- `docker --version` / `docker compose version` — проверка установки
+
+![Docker установлен](img/14-docker-installed.png)
+
+### Bash-скрипт деплоя
+
+Создан `/home/smeshkov/deploy.sh`, который клонирует fork в `/opt/shvirtd-example-python` и запускает проект через `docker compose`.
+
+![Содержимое deploy.sh](img/15-deploy-script.png)
+
+Пояснение ключевых строк:
+- `set -euo pipefail` — строгий режим bash
+- `REPO_URL` — ссылка на fork репозитория
+- `TARGET_DIR="/opt/shvirtd-example-python"` — каталог для клонирования (по заданию)
+- `git -C "$TARGET_DIR" pull` — обновление репо, если уже склонирован
+- `git clone "$REPO_URL" "$TARGET_DIR"` — клонирование
+- `docker compose up -d --build` — сборка и запуск в фоне
+
+### Запуск проекта на ВМ
+
+```bash
+./deploy.sh
+```
+
+Результат — 4 контейнера запущены:
+
+![Контейнеры на облачной ВМ](img/17-containers-running.png)
+
+### Проверка работы
+
+Локально на ВМ:
+
+```bash
+curl -L http://127.0.0.1:8090
+```
+
+![Локальный curl на ВМ](img/18-curl-local.png)
+
+### Проверка через check-host
+
+Запущена проверка `http://51.250.92.180:8090` на https://check-host.net/check-http
+
+Все локации вернули **200 OK** — сервис доступен из интернета.
+
+![Результат check-host](img/19-check-host.png)
+
+Проверка из браузера — в ответе JSON с временем и **реальным публичным IP** (не 127.0.0.1):
+
+![Ответ в браузере](img/20-browser-response.png)
+
+Проверка через curl с внешней машины:
+
+```bash
+curl -L http://51.250.92.180:8090
+```
+
+![Внешний curl](img/21-curl-external.png)
+
+**Что доказывает цепочку:** в ответе виден реальный публичный IP клиента (`195.16.110.19`). Трафик прошёл: Internet → Nginx (8090) → HAProxy (8080) → FastAPI (5000) → MySQL → HAProxy → Nginx → Internet → клиент.
+
+### SQL-запрос на сервере
+
+```bash
+sudo docker exec -ti shvirtd-example-python-db-1 mysql -uroot -p<пароль_root>
+```
+
+Далее:
+
+```sql
+show databases;
+use virtd;
+show tables;
+SELECT * from requests LIMIT 10;
+```
+
+![SQL-запрос на сервере](img/22-sql-on-server.png)
+
+В таблице `requests` записи от:
+- `127.0.0.1` — локальный curl с ВМ
+- `185.244.28.180`, `185.37.147.117`, `142.132.174.167` и др. — IP серверов check-host
+
+Это доказывает, что внешний трафик реально дошёл до FastAPI и записался в MySQL.
+
+### Остановка проекта
+
+```bash
+cd /opt/shvirtd-example-python
+sudo docker compose down
+```
+
+![Остановка проекта на сервере](img/23-compose-down-on-server.png)
+
+### Ссылка на fork
+
+https://github.com/meshkov-sergey/shvirtd-example-python
+
 ## Автор
 
 - **Студент**: Мешков Сергей
