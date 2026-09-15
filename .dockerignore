@@ -1,0 +1,15 @@
+.git
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+.env
+venv/
+*.pdf
+README.md
+LICENSE
+haproxy/
+nginx/
+proxy.yaml
+schema.pdf
